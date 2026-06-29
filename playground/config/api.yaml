@@ -1,0 +1,39 @@
+# Copyright 2026 Salesforce, Inc. All rights reserved.
+---
+apiVersion: gateway.mulesoft.com/v1alpha1
+kind: ApiInstance
+metadata:
+  name: ingress-http
+spec:
+  address: http://0.0.0.0:8081
+  services:
+    upstream:
+      address: http://mcp-upstream/anything
+      routes:
+        - config:
+            destinationPath: /
+  policies:
+    - policyRef:
+        name: omni-policy-mcp-tool-drift-via-a2d-v0-1-impl
+        namespace: default
+      config:
+        a2d:
+          baseUrl: https://a2d-ai.com
+          assetId: REPLACE_WITH_A2D_ASSET_ID
+          apiKeySecretRef: a2d-api-key
+          refreshIntervalSec: 300
+          pdpTimeoutMs: 250
+        decision:
+          source: cache
+          hybridSampleRate: 0.1
+        enforce:
+          exactMatch: true
+          allowAddedTools: false
+          allowRemovedTools: true
+        evidence:
+          reportToA2d: true
+          logLocally: true
+        mode: enforce
+        failOpen:
+          onSpecUnavailable: false
+          onPdpUnavailable: true

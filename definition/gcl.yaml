@@ -1,0 +1,150 @@
+---
+apiVersion: gateway.mulesoft.com/v1alpha1
+kind: Extension
+metadata:
+  labels:
+    title: MCP Tool Drift Detection (via A²D)
+    description: |
+      Detects MCP tool drift — runtime `tools/list` responses that have
+      changed since the spec was approved in A²D. Three decision modes:
+      `cache` (local LKG, lowest latency), `remote-pdp` (per-request
+      validation against the A²D policy-decision endpoint), and `hybrid`
+      (decide locally, audit centrally).
+    category: MCP
+    metadata/interfaceScope: api,resource
+    metadata/capabilities/injectionPoint: inbound
+spec:
+  extends:
+    - name: extension-definition
+      namespace: default
+  properties:
+    # ------------------------------------------------------------------
+    # A²D platform that owns the canonical spec and the PDP endpoint.
+    # ------------------------------------------------------------------
+    a2d:
+      type: object
+      description: |
+        A²D-hosted endpoints. The spec is fetched from
+        `{baseUrl}/api/platform/{assetId}/mcp/spec`. The PDP lives at
+        `{baseUrl}/api/platform/{assetId}/mcp/validate`. Evidence lands
+        at `{baseUrl}/api/platform/{assetId}/mcp/evidence`.
+      properties:
+        baseUrl:
+          type: string
+          default: https://a2d-ai.com
+        assetId:
+          type: string
+        apiKeySecretRef:
+          type: string
+          description: Per-instance A²D API key (header `x-a2d-api-key`).
+        refreshIntervalSec:
+          type: integer
+          minimum: 30
+          maximum: 86400
+          default: 300
+          description: |
+            Cache mode only — spec refresh cadence. Ignored in
+            `remote-pdp` mode (the PDP itself decides).
+        pdpTimeoutMs:
+          type: integer
+          minimum: 25
+          maximum: 5000
+          default: 250
+          description: |
+            Per-request timeout when the policy calls A²D's PDP. Tuned
+            low because the PDP is on the request path.
+      required:
+        - assetId
+        - apiKeySecretRef
+
+    # ------------------------------------------------------------------
+    # Decision-source selection — the policy's defining axis.
+    # ------------------------------------------------------------------
+    decision:
+      type: object
+      properties:
+        source:
+          type: string
+          enum:
+            - cache
+            - remote-pdp
+            - hybrid
+          default: cache
+          description: |
+            `cache` — decide locally from a refreshed spec cache.
+              Lowest latency. Spec staleness is bounded by
+              `a2d.refreshIntervalSec`.
+            `remote-pdp` — call A²D's PDP per request. Always reflects
+              the very latest spec but adds one network hop to every
+              MCP call. Use behind a circuit breaker.
+            `hybrid` — decide locally for latency, ALSO call the PDP
+              asynchronously for evidence; on disagreement raise a
+              `pdp_disagreement` event.
+        hybridSampleRate:
+          type: number
+          minimum: 0.0
+          maximum: 1.0
+          default: 0.1
+          description: |
+            Hybrid mode only — fraction of requests for which the async
+            PDP audit fires. Deterministic per request.
+
+    # ------------------------------------------------------------------
+    # Enforcement gates against the spec.
+    # ------------------------------------------------------------------
+    enforce:
+      type: object
+      properties:
+        exactMatch:
+          type: boolean
+          default: true
+        allowAddedTools:
+          type: boolean
+          default: false
+        allowRemovedTools:
+          type: boolean
+          default: true
+
+    # ------------------------------------------------------------------
+    # Evidence reporting.
+    # ------------------------------------------------------------------
+    evidence:
+      type: object
+      properties:
+        reportToA2d:
+          type: boolean
+          default: true
+        logLocally:
+          type: boolean
+          default: true
+
+    # ------------------------------------------------------------------
+    # Decision mode (orthogonal to decision.source — what to do with
+    # the verdict).
+    # ------------------------------------------------------------------
+    mode:
+      type: string
+      enum:
+        - enforce
+        - observe
+        - warn
+      default: enforce
+
+    # ------------------------------------------------------------------
+    # Failure behavior.
+    # ------------------------------------------------------------------
+    failOpen:
+      type: object
+      properties:
+        onSpecUnavailable:
+          type: boolean
+          default: false
+        onPdpUnavailable:
+          type: boolean
+          default: true
+          description: |
+            `remote-pdp`/`hybrid` only — when the PDP is unreachable,
+            fall back to the cached spec (or, if no cache, pass-through
+            with `pdp_unavailable` evidence).
+  required:
+    - a2d

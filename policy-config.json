@@ -1,0 +1,27 @@
+{
+  "a2d": {
+    "baseUrl": "https://a2d-ai.com",
+    "assetId": "my-mcp-server-asset-123",
+    "apiKeySecretRef": "a2d-api-key",
+    "refreshIntervalSec": 300,
+    "pdpTimeoutMs": 250
+  },
+  "decision": {
+    "source": "cache",
+    "hybridSampleRate": 0.1
+  },
+  "enforce": {
+    "exactMatch": true,
+    "allowAddedTools": false,
+    "allowRemovedTools": true
+  },
+  "evidence": {
+    "reportToA2d": true,
+    "logLocally": true
+  },
+  "mode": "enforce",
+  "failOpen": {
+    "onSpecUnavailable": false,
+    "onPdpUnavailable": true
+  }
+}

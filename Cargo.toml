@@ -9,9 +9,12 @@ edition = "2021"
 crate-type = ["cdylib", "rlib"]
 
 [package.metadata.anypoint]
-group_id = "f684513f-280e-403a-ac53-80ca62e3de49"
-definition_asset_id = "omni-policy-mcp-tool-drift-via-a2d"
-implementation_asset_id = "omni-policy-mcp-tool-drift-via-a2d-impl"
+group_id = "82a0453b-22e6-430d-bbf4-35b989d043dc"
+# The Anypoint Exchange CLI rejects asset ids whose hyphen-separated segments
+# mix letters and digits (e.g. "a2d"). Each segment must be purely alphabetic
+# or purely numeric, so "a2d" is encoded as "a-2-d".
+definition_asset_id = "omni-policy-mcp-tool-drift-via-a-2-d"
+implementation_asset_id = "omni-policy-mcp-tool-drift-via-a-2-d-impl"
 
 [dependencies]
 pdk = { version = "1.9.0", features = ["enable_stop_iteration"] }

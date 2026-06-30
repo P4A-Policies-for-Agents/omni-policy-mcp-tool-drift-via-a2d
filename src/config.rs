@@ -94,104 +94,82 @@ pub struct PolicyConfig {
 
 impl PolicyConfig {
     pub fn from_config(raw: &Config) -> Result<Self, ConfigError> {
-        let v = serde_json::to_value(raw).expect("Config -> Value");
-        let a2d = parse_a2d(&v)?;
-        let decision = parse_decision(&v)?;
-        let enforce = parse_enforce(&v);
-        let evidence = parse_evidence(&v);
-        let mode = Mode::parse(v.get("mode").and_then(|x| x.as_str()).unwrap_or("enforce"))?;
-        let fail_open = parse_fail_open(&v);
+        let a2d = parse_a2d(&raw.a_2_d)?;
+        let decision = parse_decision(raw.decision.as_ref())?;
+        let enforce = parse_enforce(raw.enforce.as_ref());
+        let evidence = parse_evidence(raw.evidence.as_ref());
+        let mode = Mode::parse(raw.mode.as_deref().unwrap_or("enforce"))?;
+        let fail_open = parse_fail_open(raw.fail_open.as_ref());
         Ok(Self { a2d, decision, enforce, evidence, mode, fail_open })
     }
 }
 
-fn parse_a2d(v: &serde_json::Value) -> Result<A2dRef, ConfigError> {
-    let e = v.get("a2d").ok_or(ConfigError::MissingField("a2d"))?;
+fn require(value: &str, field: &'static str) -> Result<String, ConfigError> {
+    if value.is_empty() {
+        Err(ConfigError::MissingField(field))
+    } else {
+        Ok(value.to_string())
+    }
+}
+
+fn parse_a2d(e: &crate::generated::config::A2DConfig) -> Result<A2dRef, ConfigError> {
     Ok(A2dRef {
         base_url: e
-            .get("baseUrl")
-            .and_then(|x| x.as_str())
-            .unwrap_or("https://a2d-ai.com")
-            .to_string(),
-        asset_id: required_string(e, "assetId")?,
-        api_key_secret_ref: required_string(e, "apiKeySecretRef")?,
+            .base_url
+            .clone()
+            .unwrap_or_else(|| "https://a2d-ai.com".to_string()),
+        asset_id: require(&e.asset_id, "assetId")?,
+        api_key_secret_ref: require(&e.api_key_secret_ref, "apiKeySecretRef")?,
         refresh_interval_secs: e
-            .get("refreshIntervalSec")
-            .and_then(|x| x.as_i64())
+            .refresh_interval_sec
             .unwrap_or(300)
             .clamp(30, 86_400) as u32,
         pdp_timeout_ms: e
-            .get("pdpTimeoutMs")
-            .and_then(|x| x.as_i64())
+            .pdp_timeout_ms
             .unwrap_or(250)
             .clamp(25, 5_000) as u32,
     })
 }
 
-fn parse_decision(v: &serde_json::Value) -> Result<DecisionConfig, ConfigError> {
-    let d = v.get("decision");
-    let source =
-        DecisionSource::parse(d.and_then(|x| x.get("source")).and_then(|x| x.as_str()).unwrap_or("cache"))?;
+fn parse_decision(
+    d: Option<&crate::generated::config::DecisionConfig>,
+) -> Result<DecisionConfig, ConfigError> {
+    let source = DecisionSource::parse(
+        d.and_then(|x| x.source.as_deref()).unwrap_or("cache"),
+    )?;
     let hybrid_sample_rate = d
-        .and_then(|x| x.get("hybridSampleRate"))
-        .and_then(|x| x.as_f64())
+        .and_then(|x| x.hybrid_sample_rate)
         .unwrap_or(0.1)
         .clamp(0.0, 1.0);
     Ok(DecisionConfig { source, hybrid_sample_rate })
 }
 
-fn parse_enforce(v: &serde_json::Value) -> EnforceConfig {
-    let e = v.get("enforce");
+fn parse_enforce(
+    e: Option<&crate::generated::config::EnforceConfig>,
+) -> EnforceConfig {
     EnforceConfig {
-        exact_match: e
-            .and_then(|x| x.get("exactMatch"))
-            .and_then(|x| x.as_bool())
-            .unwrap_or(true),
-        allow_added_tools: e
-            .and_then(|x| x.get("allowAddedTools"))
-            .and_then(|x| x.as_bool())
-            .unwrap_or(false),
-        allow_removed_tools: e
-            .and_then(|x| x.get("allowRemovedTools"))
-            .and_then(|x| x.as_bool())
-            .unwrap_or(true),
+        exact_match: e.and_then(|x| x.exact_match).unwrap_or(true),
+        allow_added_tools: e.and_then(|x| x.allow_added_tools).unwrap_or(false),
+        allow_removed_tools: e.and_then(|x| x.allow_removed_tools).unwrap_or(true),
     }
 }
 
-fn parse_evidence(v: &serde_json::Value) -> EvidenceConfig {
-    let e = v.get("evidence");
+fn parse_evidence(
+    e: Option<&crate::generated::config::EvidenceConfig>,
+) -> EvidenceConfig {
     EvidenceConfig {
-        report_to_a2d: e
-            .and_then(|x| x.get("reportToA2d"))
-            .and_then(|x| x.as_bool())
-            .unwrap_or(true),
-        log_locally: e
-            .and_then(|x| x.get("logLocally"))
-            .and_then(|x| x.as_bool())
-            .unwrap_or(true),
+        report_to_a2d: e.and_then(|x| x.report_to_a_2_d).unwrap_or(true),
+        log_locally: e.and_then(|x| x.log_locally).unwrap_or(true),
     }
 }
 
-fn parse_fail_open(v: &serde_json::Value) -> FailOpenConfig {
-    let f = v.get("failOpen");
+fn parse_fail_open(
+    f: Option<&crate::generated::config::FailOpenConfig>,
+) -> FailOpenConfig {
     FailOpenConfig {
-        on_spec_unavailable: f
-            .and_then(|x| x.get("onSpecUnavailable"))
-            .and_then(|x| x.as_bool())
-            .unwrap_or(false),
-        on_pdp_unavailable: f
-            .and_then(|x| x.get("onPdpUnavailable"))
-            .and_then(|x| x.as_bool())
-            .unwrap_or(true),
+        on_spec_unavailable: f.and_then(|x| x.on_spec_unavailable).unwrap_or(false),
+        on_pdp_unavailable: f.and_then(|x| x.on_pdp_unavailable).unwrap_or(true),
     }
-}
-
-fn required_string(v: &serde_json::Value, field: &'static str) -> Result<String, ConfigError> {
-    v.get(field)
-        .and_then(|x| x.as_str())
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
-        .ok_or(ConfigError::MissingField(field))
 }
 
 #[cfg(test)]

@@ -93,6 +93,49 @@ spec_unavailable | spec_stale | pdp_unavailable | pdp_disagreement`.
 
 ---
 
+## Live Demo
+
+A reference deployment of this policy is running on the
+`agent-network-ingress-gw` Flex Gateway in the Anypoint Sandbox
+environment (org `anypoint-cbp-1780648272`).
+
+| Field | Value |
+|---|---|
+| Gateway | `agent-network-ingress-gw` (id `35755bec-3177-4d32-a8c9-c9705f5b1c0b`, gw `1.13.2`) |
+| Public base URL | `https://agent-network-ingress-gw-zovwbn.jeg62f.usa-e2.cloudhub.io` |
+| Proxy path | `/mcp-drift-via-a2d-demo` |
+| API instance | `20999089` (Exchange asset `drift-demo-a2d-mcp/1.0.0`) |
+| Upstream (a2d mock) | `https://www.a2d-ai.com/api/platform/7b26e0d0-dfcf-4c6a-8484-8c907724366d/mcp` |
+| Policy version (dev) | `omni-policy-mcp-tool-drift-via-a-2-d-dev/0.1.0-20260629203620` |
+
+The upstream is an A²D-hosted MCP mock server declaring three tools
+(`lookup_account`, `search_accounts`, `get_account_balance`). It is the
+source of truth for the pinned descriptor set this policy enforces.
+
+### Try it
+
+`tools/list` should return the three pinned tools unchanged:
+
+```bash
+curl -sS -X POST \
+  https://agent-network-ingress-gw-zovwbn.jeg62f.usa-e2.cloudhub.io/mcp-drift-via-a2d-demo \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"tools/list","id":1}'
+```
+
+To exercise drift, mutate one tool's description in the A²D mock UI
+(asset id `7b26e0d0-…366d`) and re-issue the request. The policy
+strips the drifted tool and POSTs a `descriptor_drift` evidence event
+to `https://www.a2d-ai.com/api/policy/evidence`. The matching
+`policy_evidence` row appears in A²D Test Lab under "Runtime Runs."
+
+Note: the policy config currently uses placeholder secrets
+(`REPLACE_WITH_PLATFORM_API_KEY`). Swap in real Flex secret refs via
+Anypoint Secrets Manager and re-apply the policy before the upstream
+PDP call will authenticate.
+
+---
+
 ## Build, test, run
 
 ```bash

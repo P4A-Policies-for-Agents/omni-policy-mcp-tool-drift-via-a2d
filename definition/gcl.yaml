@@ -13,6 +13,7 @@ metadata:
     category: MCP
     metadata/interfaceScope: api,resource
     metadata/capabilities/injectionPoint: inbound
+    metadata/capabilities/assetTypes: mcp
 spec:
   extends:
     - name: extension-definition

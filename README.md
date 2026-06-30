@@ -10,6 +10,64 @@ from**.
 
 ---
 
+## Purpose & business need
+
+### The problem
+
+An LLM agent calling an MCP server reads the `tools/list` response
+before deciding which tool to invoke. The description, the input
+schema, the output shape, the annotations — every byte of that
+descriptor influences whether the agent picks the tool, what
+parameters it sends, and what it does with the response.
+
+That descriptor set is reviewed, approved, and signed off on inside
+A²D as part of the asset lifecycle. After that, **anything can
+happen**:
+
+- The MCP server is redeployed with a "small" copy edit to a tool
+  description.
+- A new input field is added to a schema "just to capture more
+  context."
+- An upstream library bumps a version and quietly rewrites the tool's
+  output shape.
+- An attacker who reached the upstream changes a description to
+  include instructions the LLM will obey.
+
+None of those changes go back through A²D approval. The agent calling
+the tool sees the new descriptor and acts on it.
+
+### Why this policy
+
+A²D already owns the canonical, approved descriptor set per asset
+(see `generateMCPSpec()` and the platform API). This policy makes
+that approval load-bearing at runtime:
+
+- **Continuous compliance** — every `tools/list` response is hashed
+  and compared to the A²D-canonical pin. Any field-level change
+  surfaces as `description_changed` / `input_schema_changed` /
+  `output_schema_changed` / `annotation_changed` evidence.
+- **Decision locality, your call** — pure-local (`cache`), per-request
+  PDP (`remote-pdp`), or hybrid (cache decides, PDP audits a sample).
+  Latency vs freshness vs auditability is a configuration knob, not a
+  rewrite.
+- **Closed-loop evidence** — every drift event POSTs to A²D, so the
+  approver who signed the descriptor sees the runtime regression next
+  to their approval — no Slack thread required.
+- **Optional enforcement** — `enforce` mode strips the drifted tool
+  from the response *before* the agent reads it. `warn` and `observe`
+  are first-class for staged rollouts.
+
+### Who needs this
+
+- Platform teams who let product teams ship MCP servers fast but
+  cannot let undocumented descriptor changes reach prod agents.
+- Compliance owners who need an audit trail tying *every* runtime
+  descriptor back to a named approver and date.
+- Anyone running an LLM agent on top of an MCP server they don't
+  fully control.
+
+---
+
 ## Decision sources
 
 | Source | What it does | Latency cost | Freshness |
@@ -128,6 +186,38 @@ To exercise drift, mutate one tool's description in the A²D mock UI
 strips the drifted tool and POSTs a `descriptor_drift` evidence event
 to `https://www.a2d-ai.com/api/policy/evidence`. The matching
 `policy_evidence` row appears in A²D Test Lab under "Runtime Runs."
+
+### Real-world scenario
+
+A bank ships an "Account Lookup" MCP server. The approved
+`lookup_account` tool returns the account holder's name and account
+type — that's what compliance signed off on, and the description in
+A²D is explicit: *"Returns only non-sensitive account metadata."*
+
+Six weeks later, a well-meaning engineer adds the IBAN to the response
+schema "to support a new feature." The MCP server is redeployed. No
+ticket, no approval, no PR review by the security team — but the
+agent driving customer chat now happily includes IBANs in its
+responses, and the chat transcript is logged to a third-party
+analytics tool.
+
+With this policy attached:
+
+1. Next `tools/list` to the deployed MCP server is hashed and
+   compared against the A²D-approved pin.
+2. The `outputSchema` hash diverges — `descriptor_drift` event fires
+   with `field: output_schema_changed`.
+3. In `enforce` mode, the runtime `lookup_account` is stripped from
+   the response before the agent sees it. Customer chat falls back to
+   the safe "I don't have access to that information" path instead of
+   leaking the IBAN.
+4. The drift event lands in A²D next to the original approver's name,
+   approval timestamp, and a diff of the schema. Compliance has the
+   evidence trail without anyone having to reproduce the bug.
+
+The agent is unchanged. The MCP server is unchanged. The gateway is
+the only enforcement point — and the only thing that knew the
+descriptor wasn't supposed to grow an `iban` field.
 
 Note: the policy config currently uses placeholder secrets
 (`REPLACE_WITH_PLATFORM_API_KEY`). Swap in real Flex secret refs via

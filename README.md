@@ -119,6 +119,31 @@ Orthogonal to source — *what to do once the verdict is known*.
 Every decision lands as a JSON log line and (when `reportToA2d=true`)
 POSTs to `{baseUrl}/api/platform/{assetId}/mcp/evidence`.
 
+Evidence emission is debounced per-instance: at most one row per
+`(tool_name, detection_class)` per 60 s window, bounded by a
+1024-entry LRU. Enforcement decisions are NOT gated — a sustained
+drift storm still triggers per-request stripping, but only one
+evidence row surfaces per window.
+
+## Transport
+
+The policy handles both MCP Streamable HTTP transports:
+
+- **`application/json`** — plain JSON-RPC envelope in the response body.
+- **`text/event-stream`** — one or more SSE frames whose `data:` line
+  is a JSON-RPC envelope. Un-mutated frames round-trip byte-perfectly.
+
+`content-length` is stripped on the response headers before the body
+handler mutates the payload.
+
+## Auth
+
+The A²D-side surfaces (`/mcp/spec`, `/mcp/validate`, `/mcp/evidence`)
+are reached with `Authorization: Bearer <key>` where `<key>` is an A²D
+**policy-scoped** API key sourced from a Flex secrets entry
+(`a2d.apiKeySecretRef`). Policy-scoped keys can reach only those three
+surfaces on the A²D side — never full-scope A²D user tokens.
+
 ```json
 {
   "class": "descriptor_drift",
@@ -184,7 +209,7 @@ curl -sS -X POST \
 To exercise drift, mutate one tool's description in the A²D mock UI
 (asset id `7b26e0d0-…366d`) and re-issue the request. The policy
 strips the drifted tool and POSTs a `descriptor_drift` evidence event
-to `https://www.a2d-ai.com/api/policy/evidence`. The matching
+to `{baseUrl}/api/platform/{assetId}/mcp/evidence`. The matching
 `policy_evidence` row appears in A²D Test Lab under "Runtime Runs."
 
 ### Real-world scenario

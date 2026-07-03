@@ -9,11 +9,13 @@
 pub mod a2d;
 pub mod cache;
 pub mod config;
+pub mod debounce;
 pub mod evidence;
 pub mod generated;
 pub mod jsonrpc;
 pub mod sampler;
 pub mod spec;
+pub mod sse;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -24,6 +26,7 @@ use pdk::hl::*;
 use pdk::logger;
 
 use crate::config::{DecisionSource, Mode, PolicyConfig};
+use crate::debounce::{now_epoch_secs, Debouncer};
 use crate::evidence::{Decision, DecisionSourceTag, DetectionClass, Event, Severity};
 use crate::generated::config::Config;
 use crate::spec::{diff_tool, SpecCache, ToolVerdict};
@@ -32,6 +35,19 @@ use crate::spec::{diff_tool, SpecCache, ToolVerdict};
 struct PolicyState {
     cfg: Rc<PolicyConfig>,
     spec: Rc<RefCell<Option<SpecCache>>>,
+    debouncer: Rc<RefCell<Debouncer>>,
+}
+
+fn emit_debounced(event: Event<'_>, state: &PolicyState, now_secs: u64) {
+    let tool_key = event.tool_name.unwrap_or("<policy>");
+    let class_label = event.class.debounce_label();
+    if state
+        .debouncer
+        .borrow_mut()
+        .should_emit(tool_key, class_label, now_secs)
+    {
+        event.emit();
+    }
 }
 
 fn source_tag(source: DecisionSource) -> DecisionSourceTag {
@@ -67,12 +83,9 @@ async fn response_filter(
         .map(|(_, v)| v)
         .unwrap_or_default();
 
-    // SSE responses cannot be buffered; pass through.
-    if ct.contains("text/event-stream") {
-        logger::debug!("mcp-drift-a2d: SSE response detected; pass-through");
-        return;
-    }
-    if !ct.contains("application/json") {
+    let is_sse = ct.contains("text/event-stream");
+    let is_json = ct.contains("application/json");
+    if !is_sse && !is_json {
         return;
     }
 
@@ -81,17 +94,66 @@ async fn response_filter(
 
     let body_state = headers_state.into_body_state().await;
     let body = body_state.handler().body().to_vec();
-    let resp: jsonrpc::JsonRpcResponse = match serde_json::from_slice(&body) {
-        Ok(r) => r,
-        Err(_) => return,
+
+    let rewritten: Option<Vec<u8>> = if is_sse {
+        enforce_sse(&body, &state)
+    } else {
+        enforce_json(&body, &state)
     };
-    // JSON-RPC notifications (id missing or null): always pass through.
-    if resp.id.is_none() || matches!(resp.id, Some(serde_json::Value::Null)) {
-        return;
+
+    if let Some(new_body) = rewritten {
+        let _ = body_state.handler().set_body(&new_body);
     }
-    let Some(tools) = jsonrpc::extract_tools_array(&resp) else {
-        return;
-    };
+}
+
+/// Parse the SSE body, apply policy to any `tools/list` response, re-emit.
+/// Returns `None` when no event was mutated (byte-perfect pass-through).
+fn enforce_sse(body: &[u8], state: &PolicyState) -> Option<Vec<u8>> {
+    let mut events = sse::parse(body);
+    let mut mutated = false;
+    for ev in events.iter_mut() {
+        let Some(data) = ev.data.as_deref() else {
+            continue;
+        };
+        let Ok(resp) = serde_json::from_str::<jsonrpc::JsonRpcResponse>(data) else {
+            continue;
+        };
+        if let Some(new_resp) = apply_policy(&resp, state) {
+            let Ok(new_data) = serde_json::to_string(&new_resp) else {
+                continue;
+            };
+            ev.data = Some(new_data);
+            mutated = true;
+        }
+    }
+    if !mutated {
+        return None;
+    }
+    Some(sse::serialize(&events))
+}
+
+/// Plain-JSON transport counterpart to `enforce_sse`.
+fn enforce_json(body: &[u8], state: &PolicyState) -> Option<Vec<u8>> {
+    let resp: jsonrpc::JsonRpcResponse = serde_json::from_slice(body).ok()?;
+    let new_resp = apply_policy(&resp, state)?;
+    serde_json::to_vec(&new_resp).ok()
+}
+
+/// Run the drift-detection logic against a single JSON-RPC response.
+///
+/// Returns `Some(new_resp)` when Enforce mode stripped at least one tool.
+/// Returns `None` when the response is not a successful `tools/list`, the
+/// mode is Observe/Warn (evidence still emitted), or every tool passed.
+fn apply_policy(
+    resp: &jsonrpc::JsonRpcResponse,
+    state: &PolicyState,
+) -> Option<jsonrpc::JsonRpcResponse> {
+    if resp.id.is_none() || matches!(resp.id, Some(serde_json::Value::Null)) {
+        return None;
+    }
+    let tools = jsonrpc::extract_tools_array(resp)?;
+
+    let now_secs = now_epoch_secs();
 
     let spec_borrow = state.spec.borrow().clone();
     let Some(spec) = spec_borrow else {
@@ -100,29 +162,33 @@ async fn response_filter(
         } else {
             Severity::Critical
         };
-        Event {
-            class: DetectionClass::SpecUnavailable,
-            severity,
-            decision: if state.cfg.fail_open.on_spec_unavailable {
-                Decision::Allowed
-            } else {
-                Decision::Blocked
+        emit_debounced(
+            Event {
+                class: DetectionClass::SpecUnavailable,
+                severity,
+                decision: if state.cfg.fail_open.on_spec_unavailable {
+                    Decision::Allowed
+                } else {
+                    Decision::Blocked
+                },
+                source: source_tag(state.cfg.decision.source),
+                asset_id: &state.cfg.a2d.asset_id,
+                asset_version: None,
+                policy_instance_id: None,
+                tool_name: None,
+                local_verdict: None,
+                pdp_verdict: None,
+                note: Some("no spec loaded"),
             },
-            source: source_tag(state.cfg.decision.source),
-            asset_id: &state.cfg.a2d.asset_id,
-            asset_version: None,
-            policy_instance_id: None,
-            tool_name: None,
-            local_verdict: None,
-            pdp_verdict: None,
-            note: Some("no spec loaded"),
-        }
-        .emit();
-        return;
+            state,
+            now_secs,
+        );
+        return None;
     };
 
     let mut kept: Vec<serde_json::Value> = Vec::with_capacity(tools.len());
-    for tool in tools {
+    let mut stripped_any = false;
+    for tool in tools.iter() {
         let name = tool
             .get("name")
             .and_then(|v| v.as_str())
@@ -133,34 +199,41 @@ async fn response_filter(
                 kept.push(tool.clone());
                 continue;
             }
-            ToolVerdict::DescriptorDrift => {
-                (DetectionClass::DescriptorDrift, Severity::Critical, state.cfg.enforce.exact_match)
-            }
+            ToolVerdict::DescriptorDrift => (
+                DetectionClass::DescriptorDrift,
+                Severity::Critical,
+                state.cfg.enforce.exact_match,
+            ),
             ToolVerdict::UnpinnedTool => (
                 DetectionClass::UnpinnedTool,
                 Severity::Warning,
                 !state.cfg.enforce.allow_added_tools,
             ),
         };
-        Event {
-            class,
-            severity,
-            decision: decision_for(state.cfg.mode, would_block),
-            source: source_tag(state.cfg.decision.source),
-            asset_id: &state.cfg.a2d.asset_id,
-            asset_version: Some(&spec.asset_version),
-            policy_instance_id: None,
-            tool_name: Some(name),
-            local_verdict: Some(match verdict {
-                ToolVerdict::Unchanged => "unchanged",
-                ToolVerdict::DescriptorDrift => "descriptor_drift",
-                ToolVerdict::UnpinnedTool => "unpinned",
-            }),
-            pdp_verdict: None,
-            note: None,
-        }
-        .emit();
-        if !(would_block && matches!(state.cfg.mode, Mode::Enforce)) {
+        emit_debounced(
+            Event {
+                class,
+                severity,
+                decision: decision_for(state.cfg.mode, would_block),
+                source: source_tag(state.cfg.decision.source),
+                asset_id: &state.cfg.a2d.asset_id,
+                asset_version: Some(&spec.asset_version),
+                policy_instance_id: None,
+                tool_name: Some(name),
+                local_verdict: Some(match verdict {
+                    ToolVerdict::Unchanged => "unchanged",
+                    ToolVerdict::DescriptorDrift => "descriptor_drift",
+                    ToolVerdict::UnpinnedTool => "unpinned",
+                }),
+                pdp_verdict: None,
+                note: None,
+            },
+            state,
+            now_secs,
+        );
+        if would_block && matches!(state.cfg.mode, Mode::Enforce) {
+            stripped_any = true;
+        } else {
             kept.push(tool.clone());
         }
     }
@@ -171,37 +244,44 @@ async fn response_filter(
         .collect();
     for spec_name in spec.tools.keys() {
         if !runtime_names.contains(spec_name.as_str()) && state.cfg.enforce.allow_removed_tools {
-            Event {
-                class: DetectionClass::RemovedTool,
-                severity: Severity::Info,
-                decision: Decision::Allowed,
-                source: source_tag(state.cfg.decision.source),
-                asset_id: &state.cfg.a2d.asset_id,
-                asset_version: Some(&spec.asset_version),
-                policy_instance_id: None,
-                tool_name: Some(spec_name),
-                local_verdict: None,
-                pdp_verdict: None,
-                note: None,
-            }
-            .emit();
+            emit_debounced(
+                Event {
+                    class: DetectionClass::RemovedTool,
+                    severity: Severity::Info,
+                    decision: Decision::Allowed,
+                    source: source_tag(state.cfg.decision.source),
+                    asset_id: &state.cfg.a2d.asset_id,
+                    asset_version: Some(&spec.asset_version),
+                    policy_instance_id: None,
+                    tool_name: Some(spec_name),
+                    local_verdict: None,
+                    pdp_verdict: None,
+                    note: None,
+                },
+                state,
+                now_secs,
+            );
         }
     }
 
-    if matches!(state.cfg.mode, Mode::Enforce) {
-        let rewritten = rewrite_tools_list(&resp, kept);
-        let _ = body_state.handler().set_body(&rewritten);
+    if matches!(state.cfg.mode, Mode::Enforce) && stripped_any {
+        Some(rewrite_tools_list(resp, kept))
+    } else {
+        None
     }
 }
 
-fn rewrite_tools_list(resp: &jsonrpc::JsonRpcResponse, kept: Vec<serde_json::Value>) -> Vec<u8> {
+fn rewrite_tools_list(
+    resp: &jsonrpc::JsonRpcResponse,
+    kept: Vec<serde_json::Value>,
+) -> jsonrpc::JsonRpcResponse {
     let mut new_resp = resp.clone();
     let mut result = new_resp.result.unwrap_or_else(|| serde_json::json!({}));
     if let Some(map) = result.as_object_mut() {
         map.insert("tools".into(), serde_json::Value::Array(kept));
     }
     new_resp.result = Some(result);
-    serde_json::to_vec(&new_resp).expect("response serializes")
+    new_resp
 }
 
 #[entrypoint]
@@ -226,6 +306,7 @@ pub async fn configure(
     let state = PolicyState {
         cfg: Rc::new(cfg),
         spec: Rc::new(RefCell::new(None)),
+        debouncer: Rc::new(RefCell::new(Debouncer::default())),
     };
 
     let filter = on_response(move |resp: ResponseState| {

@@ -8,8 +8,10 @@
 //! - `/api/platform/{assetId}/mcp/evidence` — async sink for evidence
 //!   events.
 //!
-//! Authentication is a per-instance API key in the `x-a2d-api-key`
-//! header.
+//! Authentication is a per-instance A²D policy-scoped API key sent as
+//! `Authorization: Bearer <key>`. Policy-scoped keys can reach only
+//! `/mcp/spec`, `/mcp/validate`, `/mcp/evidence` on the A²D side —
+//! see docs `features/platform-mcp/policy-keys.mdx`.
 
 use std::time::Duration;
 

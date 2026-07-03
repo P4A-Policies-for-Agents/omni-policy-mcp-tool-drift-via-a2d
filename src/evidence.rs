@@ -3,7 +3,7 @@
 use pdk::logger;
 use serde::Serialize;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DetectionClass {
     DescriptorDrift,
@@ -13,6 +13,23 @@ pub enum DetectionClass {
     SpecStale,
     PdpUnavailable,
     PdpDisagreement,
+}
+
+impl DetectionClass {
+    /// Stable snake_case label used as the debounce map key. Matches the
+    /// serialized JSON representation so operators searching evidence
+    /// logs and audit tables can grep for one name across both surfaces.
+    pub fn debounce_label(self) -> &'static str {
+        match self {
+            DetectionClass::DescriptorDrift => "descriptor_drift",
+            DetectionClass::UnpinnedTool => "unpinned_tool",
+            DetectionClass::RemovedTool => "removed_tool",
+            DetectionClass::SpecUnavailable => "spec_unavailable",
+            DetectionClass::SpecStale => "spec_stale",
+            DetectionClass::PdpUnavailable => "pdp_unavailable",
+            DetectionClass::PdpDisagreement => "pdp_disagreement",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]

@@ -55,6 +55,15 @@ pub struct A2dRef {
     pub api_key_secret_ref: String,
     pub refresh_interval_secs: u32,
     pub pdp_timeout_ms: u32,
+    /// Optional path prefix prepended to every A²D request path. When
+    /// non-empty the policy runs in "loopback" mode: it dispatches to
+    /// `service` (`baseUrl`) directly instead of discovering the request's
+    /// upstream cluster. See `gcl.yaml` `pinPathPrefix`.
+    pub pin_path_prefix: String,
+    /// Cargo-anypoint codegen registers this handle at boot via
+    /// `abi.service_create`; it's the required argument to
+    /// `HttpClient::request(&service)` at runtime.
+    pub service: Option<pdk::hl::Service>,
 }
 
 #[derive(Debug, Clone)]
@@ -113,11 +122,16 @@ fn require(value: &str, field: &'static str) -> Result<String, ConfigError> {
 }
 
 fn parse_a2d(e: &crate::generated::config::A2DConfig) -> Result<A2dRef, ConfigError> {
+    // `baseUrl` is a `format: service` field, so the generated binding is a
+    // `pdk::hl::Service`; its authority is the display `base_url` used in
+    // logs, and the handle itself is threaded to `HttpClient::request`.
+    let base_url = e
+        .base_url
+        .as_ref()
+        .map(|s| s.uri().to_string())
+        .unwrap_or_else(|| "http://127.0.0.1:8081".to_string());
     Ok(A2dRef {
-        base_url: e
-            .base_url
-            .clone()
-            .unwrap_or_else(|| "https://a2d-ai.com".to_string()),
+        base_url,
         asset_id: require(&e.asset_id, "assetId")?,
         api_key_secret_ref: require(&e.api_key_secret_ref, "apiKeySecretRef")?,
         refresh_interval_secs: e
@@ -128,6 +142,14 @@ fn parse_a2d(e: &crate::generated::config::A2DConfig) -> Result<A2dRef, ConfigEr
             .pdp_timeout_ms
             .unwrap_or(250)
             .clamp(25, 5_000) as u32,
+        pin_path_prefix: e
+            .pin_path_prefix
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .trim_end_matches('/')
+            .to_string(),
+        service: e.base_url.clone(),
     })
 }
 

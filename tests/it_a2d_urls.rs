@@ -11,6 +11,7 @@ fn make_ref(base: &str) -> A2dRef {
         base_url: base.into(),
         asset_id: "abc".into(),
         api_key: "key".into(),
+        path_prefix: String::new(),
     }
 }
 
@@ -26,4 +27,14 @@ fn all_three_urls_share_asset_root() {
 fn trailing_slash_is_handled() {
     let r = make_ref("https://a2d-ai.com/");
     assert_eq!(r.spec_url(), "https://a2d-ai.com/api/platform/abc/mcp/spec");
+}
+
+#[test]
+fn loopback_prefix_is_prepended() {
+    let mut r = make_ref("http://127.0.0.1:8081");
+    r.path_prefix = "/a2d-pin".into();
+    assert_eq!(
+        r.spec_url(),
+        "http://127.0.0.1:8081/a2d-pin/api/platform/abc/mcp/spec"
+    );
 }

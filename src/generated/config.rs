@@ -5,10 +5,16 @@ pub struct A2DConfig {
     pub api_key_secret_ref: String,
     #[serde(alias = "assetId")]
     pub asset_id: String,
-    #[serde(alias = "baseUrl")]
-    pub base_url: Option<String>,
+    #[serde(
+        alias = "baseUrl",
+        default,
+        deserialize_with = "pdk::serde::deserialize_service_opt"
+    )]
+    pub base_url: Option<pdk::hl::Service>,
     #[serde(alias = "pdpTimeoutMs")]
     pub pdp_timeout_ms: Option<i64>,
+    #[serde(alias = "pinPathPrefix")]
+    pub pin_path_prefix: Option<String>,
     #[serde(alias = "refreshIntervalSec")]
     pub refresh_interval_sec: Option<i64>,
 }
@@ -59,6 +65,18 @@ pub struct Config {
 }
 #[pdk::hl::entrypoint_flex]
 fn init(abi: &dyn pdk::flex_abi::api::FlexAbi) -> Result<(), anyhow::Error> {
+    let config: Config = serde_json::from_slice(abi.get_configuration())
+        .map_err(|err| {
+            anyhow::anyhow!(
+                "Failed to parse configuration '{}'. Cause: {}",
+                String::from_utf8_lossy(abi.get_configuration()), err
+            )
+        })?;
+    let current = config.a_2_d;
+    if current.base_url.is_some() {
+        let service = current.base_url.unwrap();
+        abi.service_create(service)?;
+    }
     abi.setup()?;
     Ok(())
 }

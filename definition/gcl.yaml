@@ -32,12 +32,29 @@ spec:
       properties:
         baseUrl:
           type: string
-          default: https://a2d-ai.com
+          format: service
+          default: http://127.0.0.1:8081
+          description: A²D platform base URL.
         assetId:
           type: string
         apiKeySecretRef:
           type: string
           description: Per-instance A²D API key (header `x-a2d-api-key`).
+        pinPathPrefix:
+          type: string
+          default: ""
+          description: |
+            Optional path prefix prepended to every A²D request path
+            (e.g. `/a2d-pin`). When set, the policy runs in loopback mode
+            (managed Omni gateway): it dispatches the spec/validate/evidence
+            calls to `baseUrl` verbatim — no upstream-cluster discovery — so
+            `baseUrl` can point at the gateway's own internal listener
+            (`http://127.0.0.1:8081`) and the prefixed request re-enters
+            through the shared `/a2d-pin` passthrough route whose
+            `auto_host_rewrite` restores the correct `Host` for A²D. This
+            works around managed Flex Gateway mangling the egress `Host`
+            on policy-originated calls. Leave empty on self-managed
+            gateways that can reach A²D directly.
         refreshIntervalSec:
           type: integer
           minimum: 30

@@ -6,26 +6,33 @@
   `hybrid`) and three modes (`enforce` / `observe` / `warn`).
 - `SpecCache` canonical-hash diff: unchanged / descriptor-drift /
   unpinned classification.
-- Response-filter entrypoint that emits evidence and (in `enforce`)
-  strips drifted tools from `tools/list`.
-- Deterministic FNV-1a sampler for hybrid PDP audit.
-- `A2dRef` URL construction for spec / validate / evidence.
-- Five integration test files exercising diff, decision source,
-  sampler, URL construction, and config loading.
+- Dual request/response filter entrypoint that emits evidence and (in
+  `enforce`) strips drifted tools from `tools/list`, on both the
+  `application/json` and `text/event-stream` transports.
+- **Real outbound A²D client** (`HttpClient` + `Service`): `fetch_spec`,
+  `validate`, and `report`, with lazy spec load memoized in
+  `PolicyState` and refreshed on `refreshIntervalSec`.
+- **Managed-gateway loopback mode** (`a2d.pinPathPrefix`) — dispatch to
+  the gateway's internal listener through the shared `/a2d-pin` route to
+  sidestep egress-`Host` mangling.
+- Deterministic FNV-1a sampler driving the `hybrid` PDP audit.
+- `A2dRef` URL construction for spec / validate / evidence, with the
+  loopback path prefix.
 
 ## Short-term (v0.2)
 
-- **HttpClient wiring** for spec fetch, PDP validate, and evidence
-  POST — once the cargo-anypoint codegen runs at `make build` and
-  publishes the dispatch shapes.
-- **Timer + Clock** for spec refresh on the configured cadence; LKG
-  on transient PDP/spec failure.
-- **`remote-pdp` request path** — call validate, honor `pdpTimeoutMs`,
-  fall back to cache on timeout per `failOpen.onPdpUnavailable`.
-- **Hybrid audit fire-and-forget** — sampled PDP call with the
-  sampler; compare verdict to local and emit `pdp_disagreement`.
-- **Asset-version surfacing** in evidence (today the version is the
-  cached one; in `remote-pdp` it will come from the PDP response).
+- **Wire the PDP verdict into enforcement** for `remote-pdp` — today
+  `validate()` is a best-effort audit alongside the local spec diff;
+  make the PDP verdict authoritative on the hot path with a circuit
+  breaker and `failOpen.onPdpUnavailable` fallback to cache.
+- **`pdp_disagreement` emission** — compare the sampled PDP verdict to
+  the local verdict in `hybrid` and emit the divergence event.
+- **Cross-replica spec cache** — thread the `CacheBuilder` handle so
+  the spec is shared across gateway replicas instead of per-instance.
+- **Evidence POST** — call `report()` from the emit path (behind
+  `evidence.reportToA2d`) so events reach A²D, not just local logs.
+- **Asset-version surfacing** from the PDP response in `remote-pdp`
+  (today the version is the cached spec's).
 
 ## Medium-term (v0.3)
 

@@ -96,9 +96,10 @@ Orthogonal to source — *what to do once the verdict is known*.
 
 | Path | Type | Default | Notes |
 |---|---|---|---|
-| `a2d.baseUrl` | string | `https://a2d-ai.com` | |
+| `a2d.baseUrl` | string (`format: service`) | `http://127.0.0.1:8081` | A²D platform base URL. On a managed Omni gateway keep the loopback default and set `a2d.pinPathPrefix`; on a self-managed gateway that can reach A²D directly, set `https://www.a2d-ai.com`. Optional. |
 | `a2d.assetId` | string | required | A²D MCP asset id. |
 | `a2d.apiKeySecretRef` | string | required | Per-instance API key. |
+| `a2d.pinPathPrefix` | string | `""` | Loopback mode (managed gateways). When set (e.g. `/a2d-pin`) the policy dispatches spec/validate/evidence calls to `baseUrl` verbatim with this prefix prepended — no upstream-cluster discovery. See [managed-gateway setup](#deploying-on-a-managed-omni-gateway-cloudhub-20). |
 | `a2d.refreshIntervalSec` | int 30–86400 | 300 | Cache mode spec refresh. |
 | `a2d.pdpTimeoutMs` | int 25–5000 | 250 | Per-request PDP timeout. |
 | `decision.source` | enum | `cache` | `cache` / `remote-pdp` / `hybrid`. |
@@ -173,6 +174,64 @@ spec_unavailable | spec_stale | pdp_unavailable | pdp_disagreement`.
 - **PDP disagrees with cache (hybrid).** The local verdict is acted
   on, the PDP verdict is recorded, and `pdp_disagreement` evidence
   fires for post-hoc review.
+
+---
+
+## Deploying on a managed Omni Gateway (CloudHub 2.0)
+
+On a **managed** Omni / Flex Gateway the runtime rewrites the outbound
+`Host` / `:authority` of any policy-originated (WASM) call to an
+internal Envoy cluster identifier. A²D is hosted on Vercel, which
+routes **strictly by `Host`**, so a direct spec/validate/evidence call
+comes back as:
+
+```
+HTTP 404 {"error":{"code":"404","message":"The deployment could not be found on Vercel."}}
+```
+
+This is **not fixable from policy/WASM code** — it was verified that
+re-dispatching through the API's own upstream cluster still 404s, and
+that disabling the runtime host-rewrite globally breaks the main proxy
+path. The supported workaround is a **shared pin-fetch loopback route**:
+a plain HTTP passthrough API on the *same* gateway that points at
+`https://www.a2d-ai.com` and carries no policy. The policy reaches it
+through the gateway's own internal listener (`http://127.0.0.1:8081`),
+which bypasses the CloudHub load balancer's `Host` check and hits Envoy
+directly, where routing is path-based; the loopback route's
+`auto_host_rewrite` then restores the correct A²D `Host`.
+
+```
+        policy (WASM)                    loopback route             A²D
+  ┌──────────────────────┐  127.0.0.1:8081/a2d-pin/...  ┌────────────────┐
+  │ baseUrl=127.0.0.1:8081│ ───────────────────────────▶│ /a2d-pin/ →     │
+  │ pinPathPrefix=/a2d-pin │  Host mangled, routed by PATH│ auto_host_rewrite│──▶ www.a2d-ai.com
+  └──────────────────────┘                               └────────────────┘
+```
+
+Configure loopback mode by keeping the default `baseUrl` and setting
+`pinPathPrefix`:
+
+```json
+{
+  "a2d": {
+    "baseUrl": "http://127.0.0.1:8081",
+    "assetId": "<a2d-asset-id>",
+    "apiKeySecretRef": "<secret-ref>",
+    "refreshIntervalSec": 300,
+    "pinPathPrefix": "/a2d-pin"
+  },
+  "decision": { "source": "cache" },
+  "mode": "enforce",
+  "failOpen": { "onSpecUnavailable": true }
+}
+```
+
+On self-managed (connected) gateways whose pod reaches A²D directly,
+leave `pinPathPrefix` empty and set `baseUrl: https://www.a2d-ai.com`.
+
+Full step-by-step CLI instructions, verification commands, and the
+`CARGO_TARGET_DIR` build trap are in
+[`docs/managed-omni-gateway-setup.md`](docs/managed-omni-gateway-setup.md).
 
 ---
 

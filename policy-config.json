@@ -1,10 +1,11 @@
 {
   "a2d": {
-    "baseUrl": "https://a2d-ai.com",
+    "baseUrl": "http://127.0.0.1:8081",
     "assetId": "my-mcp-server-asset-123",
     "apiKeySecretRef": "a2d-api-key",
     "refreshIntervalSec": 300,
-    "pdpTimeoutMs": 250
+    "pdpTimeoutMs": 250,
+    "pinPathPrefix": "/a2d-pin"
   },
   "decision": {
     "source": "cache",

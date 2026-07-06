@@ -60,7 +60,7 @@ release: build
 
 .PHONY: build-asset-files
 build-asset-files: $(DEFINITION_SRC_GCL_PATH)
-	@anypoint-cli-v4 pdk policy-project build-asset-files --metadata '$(ANYPOINT_METADATA_JSON)'
+	@anypoint-cli-v4 pdk policy-project build-asset-files --version $(ASSET_VERSION) --metadata '$(ANYPOINT_METADATA_JSON)'
 	@if [ -d definition/target/definition ]; then \
 		cp definition/target/definition/gcl.yaml      definition/target/gcl.yaml      2>/dev/null || true; \
 		cp definition/target/definition/metadata.yaml definition/target/metadata.yaml 2>/dev/null || true; \

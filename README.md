@@ -68,6 +68,58 @@ that approval load-bearing at runtime:
 
 ---
 
+## How it works
+
+This is an **inbound MCP policy**. It pins the A²D-approved spec from
+`{baseUrl}/api/platform/{assetId}/mcp/spec` and, on every runtime
+JSON-RPC `tools/list` response, compares each advertised tool against
+that pin. The comparison is an **exact hash** over the tool's `name`,
+`description`, `inputSchema`, `outputSchema`, and `annotations`, which
+classifies each tool as:
+
+- **DRIFT** — a pinned tool whose descriptor hash no longer matches the
+  approved spec.
+- **UNPINNED** — a runtime tool with no counterpart in the approved
+  spec.
+- **REMOVED** — a pinned tool missing from the runtime response.
+
+`mode` decides what happens next: `enforce` strips drifted/unpinned
+tools before the agent reads them, while `observe` and `warn` leave the
+payload intact.
+
+The **defining axis** of this policy is `decision.source` — *where the
+verdict comes from*:
+
+- **`cache`** — decide locally from the refreshed spec cache. Lowest
+  latency; staleness bounded by `refreshIntervalSec`.
+- **`remote-pdp`** — call A²D's decision endpoint
+  `{baseUrl}/api/platform/{assetId}/mcp/validate` **per request**.
+  Always reflects the latest spec; costs one extra hop, bounded by
+  `pdpTimeoutMs` (default 250 ms).
+- **`hybrid`** — decide locally for latency **and** async-audit a
+  deterministic fraction (`hybridSampleRate`) against the PDP, raising
+  `pdp_disagreement` on mismatch.
+
+---
+
+## How this differs from `poisoning-detection-a2d`
+
+These are **not** the same policy. Both pin the A²D-approved spec,
+detect drift with `enforce` / `observe` / `warn`, and keep a
+last-known-good cache.
+
+`poisoning-detection-a2d` is the **security superset**: on top of drift
+detection it adds prompt-injection heuristics, near-name tool
+shadowing, and approver-vs-change evidence — it is built to catch
+*adversarial* content.
+
+This policy takes the other direction. It instead adds the
+**decision-sourcing axis** (`cache` / `remote-pdp` / `hybrid`) for
+**centralized change governance and audit**. It does **not** do
+adversarial-content detection.
+
+---
+
 ## Decision sources
 
 | Source | What it does | Latency cost | Freshness |
@@ -89,6 +141,44 @@ Orthogonal to source — *what to do once the verdict is known*.
 - `enforce` — strip the drifted tool from the response.
 - `warn` — pass through with `x-mcp-drift-warning` evidence.
 - `observe` — emit evidence only.
+
+---
+
+## Spec caching & refresh
+
+The pinned spec lives in an **in-memory, per-gateway-replica cache** —
+it is not shared across replicas and not persisted. Refresh is **lazy /
+request-driven**, not a background timer:
+
+- On the first request with no spec cached, the spec is fetched inline.
+- On subsequent requests the spec is refetched once its age reaches
+  `a2d.refreshIntervalSec` (default 300 s, min 30, max 86400).
+- Warming happens in the request-headers phase when the upstream
+  cluster is already known, otherwise in the response phase.
+- On a failed refetch the **last-known-good** spec is retained.
+
+**Important nuance:** this cache governs `decision.source=cache` and the
+*local half* of `hybrid`. In `remote-pdp` the verdict is made
+per-request by A²D, so there is **no cache staleness** — only the
+`pdpTimeoutMs` budget. If the PDP is unreachable,
+`failOpen.onPdpUnavailable` decides whether to fall back to the cached
+spec (or pass through).
+
+---
+
+## Real-world use case
+
+A platform team governs dozens of internal MCP servers and requires
+that any production `tools/list` **exactly matches** the spec approved
+in A²D's change process. With `decision.source=remote-pdp`, every MCP
+discovery call is validated against the live A²D decision endpoint, so
+an un-approved schema change is **blocked the instant it ships** (zero
+cache lag) with full central audit — a change-management / compliance
+gate rather than adversarial detection.
+
+For the lowest latency at the cost of up-to-`refreshIntervalSec`
+staleness, use `cache`; for both low latency and sampled central audit,
+use `hybrid`.
 
 ---
 

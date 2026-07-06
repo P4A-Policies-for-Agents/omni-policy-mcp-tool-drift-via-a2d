@@ -136,6 +136,15 @@ Evidence:
 mcp-drift-a2d-evt {"class":"descriptor_drift","severity":"critical","decision":"stripped",...}
 ```
 
+This is the canonical **failure** path: a tool whose descriptor drifted
+from the approved spec is stripped in `enforce` with a
+`descriptor_drift` evidence event. Under `decision.source=remote-pdp`
+the same drift is blocked **per request** by the live PDP verdict (no
+dependence on cache freshness) — see [§6](#6-decision-source-variants).
+The **happy** path in [§2](#2-happy-path--spec-matches-runtime) is the
+mirror image: a `tools/list` that matches the approved spec passes
+through untouched with no evidence.
+
 ---
 
 ## 5. Non-disruptive verification — observe mode

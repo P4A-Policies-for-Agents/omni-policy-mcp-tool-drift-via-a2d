@@ -58,6 +58,17 @@ publish: build
 release: build
 	anypoint-cli-v4 pdk policy-project release --binary-path $(TARGET_DIR)/$(CRATE_NAME).wasm --implementation-gcl-path $(TARGET_DIR)/$(CRATE_NAME)_implementation.yaml
 
+GROUP_ID                = $(shell cargo anypoint get-group-id)
+ASSET_VERSION           = $(shell cargo anypoint get-version)
+ASSET_ID                = $(shell cargo anypoint get-anypoint-metadata | python3 -c 'import sys,json; m=json.load(sys.stdin); print(m.get("definition-asset-id") or (m.get("package_name") or "").replace("_","-"))')
+DEFINITION_GAV          = $(GROUP_ID)/$(ASSET_ID)/$(ASSET_VERSION)
+HOME_MD                 = definition/home.md
+
+.PHONY: upload-docs
+upload-docs: ## Upload definition/home.md as the Exchange home page for the release definition asset
+	@if [ ! -f "$(HOME_MD)" ]; then echo "ERROR: $(HOME_MD) is missing"; exit 1; fi
+	anypoint-cli-v4 exchange asset page upload -f "$(DEFINITION_GAV)" home "$(HOME_MD)"
+
 .PHONY: build-asset-files
 build-asset-files: $(DEFINITION_SRC_GCL_PATH)
 	@anypoint-cli-v4 pdk policy-project build-asset-files --version $(ASSET_VERSION) --metadata '$(ANYPOINT_METADATA_JSON)'

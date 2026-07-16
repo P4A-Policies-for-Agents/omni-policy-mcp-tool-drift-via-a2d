@@ -7,6 +7,27 @@ deploying or recreating instances.
 
 ---
 
+> **⚠️ MANDATORY on a managed Omni Gateway — READ FIRST (`Host`-routed edge / pin).**
+>
+> A²D ships on `https://www.a2d-ai.com` (hosted on **Vercel**). Every multi-tenant edge
+> PaaS — **Vercel, Railway, Render, Heroku, Cloudflare Pages/Workers, Fly.io, Netlify** —
+> routes strictly by the HTTP `Host` header / TLS SNI. On a **managed** Omni Gateway
+> (Anypoint CloudHub 2.0), policy-originated (WASM) outbound calls have their egress
+> `Host` rewritten to an internal Envoy cluster name, so the edge returns
+> `404 DEPLOYMENT_NOT_FOUND` (or `404`/`502`). This is the *actual* root cause behind the
+> "unreachable A²D / closed-network" note below — it is not a firewall.
+>
+> **You MUST route the A²D callout through a same-gateway loopback "pin":**
+> 1. `a2d.baseUrl` = `http://127.0.0.1:8081` (the gateway's own internal listener).
+> 2. `a2d.pinPathPrefix` = `/a2d-pin`.
+> 3. Add a plain passthrough route (no policy) on the **same** gateway at `/a2d-pin`,
+>    upstream `https://www.a2d-ai.com`, with **`auto_host_rewrite`** so the correct
+>    `Host` is restored on egress.
+>
+> Full walkthrough: [`docs/managed-omni-gateway-setup.md`](docs/managed-omni-gateway-setup.md)
+> and the callout at the top of [`README.md`](README.md). Self-managed / connected Flex
+> Gateway that reaches A²D directly: leave `a2d.pinPathPrefix` empty for a direct call.
+
 ## Trailing slash is required on the proxy path
 
 The Flex Gateway routes the proxy path **as exact prefix including a
@@ -76,7 +97,9 @@ A²D is unreachable and `failOpen.onPdpUnavailable=true` (default) the
 policy falls back to the cached spec; otherwise the response is
 blocked. In closed-network deployments where the gateway can't reach
 `https://www.a2d-ai.com` directly, either set the fail-open flag or
-run the policy in `cache` mode.
+run the policy in `cache` mode. **On a managed Omni Gateway the usual
+cause is the `Host`-rewrite issue (see the pin callout at the top), not a
+firewall — fix it with the loopback pin instead of disabling enforcement.**
 
 ## `hybrid` mode's sample rate applies per-request, not per-tool
 

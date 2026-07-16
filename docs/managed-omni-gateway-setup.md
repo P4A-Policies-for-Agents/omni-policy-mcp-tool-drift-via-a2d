@@ -5,6 +5,8 @@ policy on a **managed** Anypoint Flex / Omni Gateway (CloudHub 2.0), and
 the one non-obvious piece of infrastructure it needs there: an A²D
 **pin-fetch loopback route**.
 
+This applies to **any** `Host`-routed multi-tenant edge platform — Vercel, Railway, Render, Heroku, Cloudflare Pages/Workers, Fly.io, Netlify — not only Vercel.
+
 If you are running a self-managed (connected) Flex Gateway where the pod
 can reach A²D directly with the correct `Host`, you do **not** need the
 loopback — set `a2d.baseUrl` to `https://www.a2d-ai.com`, leave

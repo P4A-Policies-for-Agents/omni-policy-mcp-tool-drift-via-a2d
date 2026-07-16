@@ -6,6 +6,20 @@ drifted tools from the response before they reach the LLM client. A²D
 owns the canonical spec; the gateway is the enforcement point; evidence
 flows back to A²D so drift lands next to the approving identity.
 
+> [!IMPORTANT]
+> **⚠️ MANDATORY on a managed Omni Gateway — A²D is on a `Host`-routed edge (Vercel).**
+>
+> A²D ships on `https://www.a2d-ai.com` (hosted on **Vercel**). Vercel — like every multi-tenant edge platform: **Railway, Render, Heroku, Cloudflare Pages/Workers, Fly.io, Netlify** — routes strictly by the HTTP `Host` header / TLS SNI. On a **managed** Omni Gateway (e.g. Anypoint CloudHub 2.0), policy-originated (WASM) outbound calls have their egress `Host` rewritten to an internal Envoy cluster name, so the edge can't find the app and returns `404 DEPLOYMENT_NOT_FOUND` (or `404`/`502`).
+>
+> **You MUST route the A²D callout through a same-gateway loopback "pin":**
+> 1. Set **`a2d.baseUrl`** = `http://127.0.0.1:8081` (the gateway's own internal listener).
+> 2. Set **`a2d.pinPathPrefix`** = `/a2d-pin`.
+> 3. Create a plain passthrough route (no policy) on the **same** gateway at `/a2d-pin`, upstream = `https://www.a2d-ai.com`, with **`auto_host_rewrite`** so the correct `Host` is restored on egress.
+>
+> Without the pin the policy **cannot reach A²D** on a managed gateway. Full recipe: [`docs/managed-omni-gateway-setup.md`](docs/managed-omni-gateway-setup.md). The same pin applies verbatim if you self-host A²D (or its mock) on any of the edge platforms listed above.
+>
+> **Self-managed / connected Flex Gateway** (reaches `www.a2d-ai.com` directly and honors route `auto_host_rewrite`): leave **`a2d.pinPathPrefix`** empty for a direct call.
+
 ## What it catches
 
 - **Descriptor drift** — a pinned tool whose runtime descriptor no
